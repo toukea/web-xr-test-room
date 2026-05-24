@@ -28,6 +28,9 @@ type ControllerSlot = {
 };
 
 const deadzone = 0.18;
+const handScale = 0.75;
+const handRotationX = 5.5;
+const handRotationZ = Math.PI / 2.5;
 const fingerBaseRotationX = Math.PI / 2;
 const fingerClosedRotationX = Math.PI / 2 - 1.08;
 
@@ -255,11 +258,13 @@ export class XRControls {
 }
 
 function createStylizedHand(handedness: ControllerHand): StylizedHand {
-  const side = handedness === 'left' ? -1 : 1;
+  const side = handedness === 'left' ? 1 : -1;
   const hand = new Group();
   hand.name = `${handedness}-stylized-hand`;
   hand.position.set(side * 0.025, -0.015, -0.035);
-  hand.rotation.z = side * 0.12;
+  hand.scale.setScalar(handScale);
+  hand.rotation.x = handRotationX;
+  hand.rotation.z = side * handRotationZ;
 
   const skin = new MeshToonMaterial({ color: 0xf0b18d });
   const cuff = new MeshToonMaterial({ color: 0x394c68 });
