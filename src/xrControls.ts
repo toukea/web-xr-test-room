@@ -327,7 +327,7 @@ export class XRControls {
   private alignGunInHand(slot: ControllerSlot): void {
     const side = slot.handedness === 'left' ? 1 : -1;
     this.gun.position.set(side * 0.006, -0.002, -0.035);
-    this.gun.rotation.set(0, 0, 0);
+    this.gun.rotation.set(-0.65, 0, 0);
   }
 
   private releaseHeldObject(slot: ControllerSlot): void {
