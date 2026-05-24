@@ -20,10 +20,25 @@ type ControllerSlot = {
   grip: Group;
   handedness: ControllerHand | 'none';
   inputSource?: XRInputSource;
+  handModel?: StylizedHand;
   wasGrabPressed: boolean;
+  triggerCurl: number;
+  gripCurl: number;
+  thumbCurl: number;
 };
 
 const deadzone = 0.18;
+const fingerBaseRotationX = Math.PI / 2;
+const fingerClosedRotationX = Math.PI / 2 - 1.08;
+
+type StylizedHand = {
+  root: Group;
+  index: Group;
+  gripFingers: Group[];
+  thumb: Group;
+  thumbBaseRotationY: number;
+  thumbBaseRotationZ: number;
+};
 
 export class XRControls {
   private readonly slots: ControllerSlot[] = [];
@@ -53,7 +68,10 @@ export class XRControls {
       const slot: ControllerSlot = {
         grip,
         handedness: 'none',
-        wasGrabPressed: false
+        wasGrabPressed: false,
+        triggerCurl: 0,
+        gripCurl: 0,
+        thumbCurl: 0
       };
 
       grip.visible = false;
@@ -67,6 +85,7 @@ export class XRControls {
 
   update(deltaSeconds: number): void {
     this.updateLocomotion(deltaSeconds);
+    this.updateHands(deltaSeconds);
     this.updateGrabbing();
   }
 
@@ -82,11 +101,17 @@ export class XRControls {
 
     slot.inputSource = inputSource;
     slot.handedness = handedness;
+    slot.handModel = undefined;
     slot.wasGrabPressed = false;
+    slot.triggerCurl = 0;
+    slot.gripCurl = 0;
+    slot.thumbCurl = 0;
     slot.grip.clear();
 
     if (handedness !== 'none') {
-      slot.grip.add(createStylizedHand(handedness));
+      const handModel = createStylizedHand(handedness);
+      slot.handModel = handModel;
+      slot.grip.add(handModel.root);
       slot.grip.visible = true;
     }
   }
@@ -99,8 +124,12 @@ export class XRControls {
     slot.grip.visible = false;
     slot.grip.clear();
     slot.inputSource = undefined;
+    slot.handModel = undefined;
     slot.handedness = 'none';
     slot.wasGrabPressed = false;
+    slot.triggerCurl = 0;
+    slot.gripCurl = 0;
+    slot.thumbCurl = 0;
   }
 
   private updateLocomotion(deltaSeconds: number): void {
@@ -136,6 +165,29 @@ export class XRControls {
     this.playerRig.position.addScaledVector(this.movement, 1.45 * deltaSeconds);
     this.playerRig.position.x = MathUtils.clamp(this.playerRig.position.x, this.roomBounds.minX, this.roomBounds.maxX);
     this.playerRig.position.z = MathUtils.clamp(this.playerRig.position.z, this.roomBounds.minZ, this.roomBounds.maxZ);
+  }
+
+  private updateHands(deltaSeconds: number): void {
+    for (const slot of this.slots) {
+      if (!slot.handModel) {
+        continue;
+      }
+
+      const buttons = slot.inputSource?.gamepad?.buttons;
+      const targetTriggerCurl = buttons ? readButtonValue(buttons, 0) : 0;
+      const targetGripCurl = buttons ? readButtonValue(buttons, 1) : 0;
+      const targetThumbCurl = buttons ? Math.max(
+        readButtonValue(buttons, 3),
+        readButtonValue(buttons, 4),
+        readButtonValue(buttons, 5)
+      ) : 0;
+
+      slot.triggerCurl = MathUtils.damp(slot.triggerCurl, targetTriggerCurl, 16, deltaSeconds);
+      slot.gripCurl = MathUtils.damp(slot.gripCurl, targetGripCurl, 16, deltaSeconds);
+      slot.thumbCurl = MathUtils.damp(slot.thumbCurl, targetThumbCurl, 16, deltaSeconds);
+
+      applyHandPose(slot.handModel, slot.triggerCurl, slot.gripCurl, slot.thumbCurl);
+    }
   }
 
   private updateGrabbing(): void {
@@ -202,7 +254,7 @@ export class XRControls {
   }
 }
 
-function createStylizedHand(handedness: ControllerHand): Group {
+function createStylizedHand(handedness: ControllerHand): StylizedHand {
   const side = handedness === 'left' ? -1 : 1;
   const hand = new Group();
   hand.name = `${handedness}-stylized-hand`;
@@ -216,8 +268,16 @@ function createStylizedHand(handedness: ControllerHand): Group {
   hand.add(createOutlinedBox('cuff', 0.16, 0.08, 0.09, 0, -0.01, 0.105, cuff, 1.08));
 
   const fingerXs = [-0.048, -0.016, 0.016, 0.048];
+  let indexFinger: Group | undefined;
+  const gripFingers: Group[] = [];
+
   for (const x of fingerXs) {
     const finger = createFinger('finger', 0.015, 0.115, x, 0.02, -0.095, skin);
+    if (!indexFinger) {
+      indexFinger = finger;
+    } else {
+      gripFingers.push(finger);
+    }
     hand.add(finger);
   }
 
@@ -226,7 +286,30 @@ function createStylizedHand(handedness: ControllerHand): Group {
   thumb.rotation.y = side * 0.45;
   hand.add(thumb);
 
-  return hand;
+  if (!indexFinger) {
+    throw new Error('Impossible de creer les doigts de la main stylisee.');
+  }
+
+  return {
+    root: hand,
+    index: indexFinger,
+    gripFingers,
+    thumb,
+    thumbBaseRotationY: thumb.rotation.y,
+    thumbBaseRotationZ: thumb.rotation.z
+  };
+}
+
+function applyHandPose(hand: StylizedHand, triggerCurl: number, gripCurl: number, thumbCurl: number): void {
+  hand.index.rotation.x = MathUtils.lerp(fingerBaseRotationX, fingerClosedRotationX, triggerCurl);
+
+  for (const finger of hand.gripFingers) {
+    finger.rotation.x = MathUtils.lerp(fingerBaseRotationX, fingerClosedRotationX, gripCurl);
+  }
+
+  hand.thumb.rotation.x = MathUtils.lerp(fingerBaseRotationX, fingerClosedRotationX + 0.18, Math.max(gripCurl, thumbCurl));
+  hand.thumb.rotation.y = hand.thumbBaseRotationY + thumbCurl * 0.35;
+  hand.thumb.rotation.z = hand.thumbBaseRotationZ - Math.sign(hand.thumbBaseRotationZ) * Math.max(gripCurl, thumbCurl) * 0.42;
 }
 
 function createOutlinedBox(
@@ -280,6 +363,15 @@ function createFinger(
 
 function magnitudeSq(stick: { x: number; y: number }): number {
   return stick.x * stick.x + stick.y * stick.y;
+}
+
+function readButtonValue(buttons: readonly GamepadButton[], index: number): number {
+  const button = buttons[index];
+  if (!button) {
+    return 0;
+  }
+
+  return MathUtils.clamp(button.value || (button.pressed ? 1 : 0), 0, 1);
 }
 
 function applyDeadzone(value: number): number {
