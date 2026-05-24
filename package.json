@@ -1,0 +1,25 @@
+{
+  "name": "planets-webxr-vr",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "dev:https": "VITE_HTTPS=1 vite --host 0.0.0.0",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "0.184.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.32",
+    "@types/three": "^0.184.1",
+    "@types/webxr": "^0.5.22",
+    "@vitejs/plugin-basic-ssl": "2.3.0",
+    "playwright": "1.60.0",
+    "typescript": "^5.8.3",
+    "vite": "6.4.2"
+  }
+}
