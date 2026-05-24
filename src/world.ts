@@ -56,7 +56,7 @@ export function createWorld(): World {
   const gun = createGun();
   gun.position.set(-0.18, tableTopY + 0.1, 0.02);
   gun.rotation.z = Math.PI / 2;
-  gun.scale.setScalar(0.58);
+  gun.scale.setScalar(0.4);
   root.add(gun);
 
   const { cabinet, bottles } = createCabinet();
