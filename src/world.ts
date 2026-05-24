@@ -4,6 +4,7 @@ import {
   BoxGeometry,
   CanvasTexture,
   ColorRepresentation,
+  CylinderGeometry,
   DirectionalLight,
   Group,
   Mesh,
@@ -24,6 +25,8 @@ export type RoomBounds = {
 export type World = {
   root: Group;
   board: Group;
+  gun: Group;
+  bottles: Group[];
   roomBounds: RoomBounds;
   spawn: Vector3;
 };
@@ -46,12 +49,25 @@ export function createWorld(): World {
   root.add(createTable());
 
   const board = createBoard();
-  board.position.set(0, tableTopY + 0.37, 0.04);
+  board.position.set(-roomWidth / 2 + wallThickness + 0.055, roomHeight * 0.75, -0.95);
+  board.rotation.y = Math.PI / 2;
   root.add(board);
+
+  const gun = createGun();
+  gun.position.set(-0.18, tableTopY + 0.1, 0.02);
+  gun.rotation.z = Math.PI / 2;
+  gun.scale.setScalar(0.58);
+  root.add(gun);
+
+  const { cabinet, bottles } = createCabinet();
+  cabinet.position.set(0, 0, -2.82);
+  root.add(cabinet);
 
   return {
     root,
     board,
+    gun,
+    bottles,
     roomBounds: {
       minX: -roomWidth / 2 + 0.42,
       maxX: roomWidth / 2 - 0.42,
@@ -127,8 +143,11 @@ function createTable(): Group {
 
 function createBoard(): Group {
   const board = new Group();
-  board.name = 'grabbable-framed-board';
+  board.name = 'left-wall-framed-board';
   board.userData.grabbable = true;
+  board.userData.kind = 'board';
+  board.userData.grabRadius = 0.62;
+  board.userData.wallMounted = true;
 
   const panel = toonMaterial(0x496b73);
   const frame = toonMaterial(0x6c3f22);
@@ -145,6 +164,89 @@ function createBoard(): Group {
   return board;
 }
 
+function createGun(): Group {
+  const gun = new Group();
+  gun.name = 'grabbable-pistol';
+  gun.userData.grabbable = true;
+  gun.userData.kind = 'gun';
+  gun.userData.grabRadius = 0.32;
+
+  const metal = toonMaterial(0x272f36);
+  const darkMetal = toonMaterial(0x13191f);
+  const grip = toonMaterial(0x3b2721);
+  const accent = toonMaterial(0xf0c45c);
+
+  gun.add(createBox('gun-slide', 0.18, 0.115, 0.46, 0, 0.095, -0.19, metal, true, 1.06));
+  gun.add(createBox('gun-barrel', 0.08, 0.07, 0.22, 0, 0.09, -0.49, darkMetal, true, 1.08));
+  gun.add(createBox('gun-muzzle-face', 0.095, 0.085, 0.025, 0, 0.09, -0.61, darkMetal, true, 1.05));
+  gun.add(createBox('gun-handle', 0.14, 0.31, 0.12, 0, -0.095, 0.035, grip, true, 1.06));
+  gun.add(createBox('gun-trigger-guard-front', 0.03, 0.13, 0.035, 0, -0.015, -0.095, darkMetal, true, 1.08));
+  gun.add(createBox('gun-trigger-guard-bottom', 0.03, 0.03, 0.14, 0, -0.08, -0.04, darkMetal, true, 1.08));
+  gun.add(createBox('gun-trigger', 0.022, 0.075, 0.025, 0, -0.052, -0.072, accent, false));
+  gun.add(createBox('gun-front-sight', 0.045, 0.035, 0.035, 0, 0.172, -0.48, accent, false));
+
+  const muzzle = new Object3D();
+  muzzle.name = 'gun-muzzle';
+  muzzle.position.set(0, 0.09, -0.635);
+  gun.add(muzzle);
+
+  return gun;
+}
+
+function createCabinet(): { cabinet: Group; bottles: Group[] } {
+  const cabinet = new Group();
+  cabinet.name = 'shooting-cabinet';
+
+  const bottles: Group[] = [];
+  const wood = toonMaterial(0x70451f);
+  const shadowWood = toonMaterial(0x563319);
+  const width = 2.35;
+  const height = 1.78;
+  const depth = 0.48;
+
+  cabinet.add(createBox('cabinet-back', width, height, 0.08, 0, height / 2, -depth / 2, shadowWood, true, 1.025));
+  cabinet.add(createBox('cabinet-left-side', 0.09, height, depth, -width / 2, height / 2, 0, wood, true, 1.035));
+  cabinet.add(createBox('cabinet-right-side', 0.09, height, depth, width / 2, height / 2, 0, wood, true, 1.035));
+  cabinet.add(createBox('cabinet-top', width + 0.08, 0.09, depth, 0, height, 0, wood, true, 1.035));
+  cabinet.add(createBox('cabinet-base', width + 0.08, 0.1, depth, 0, 0.05, 0, wood, true, 1.035));
+
+  const shelfYs = [0.55, 1.03, 1.51];
+  const bottleXs = [-0.78, -0.26, 0.26, 0.78];
+
+  for (const shelfY of shelfYs) {
+    cabinet.add(createBox('cabinet-shelf', width, 0.065, depth, 0, shelfY, 0, wood, true, 1.025));
+
+    for (const x of bottleXs) {
+      const bottle = createBottle();
+      bottle.position.set(x, shelfY + 0.035, 0.08);
+      cabinet.add(bottle);
+      bottles.push(bottle);
+    }
+  }
+
+  return { cabinet, bottles };
+}
+
+function createBottle(): Group {
+  const bottle = new Group();
+  bottle.name = 'breakable-bottle';
+  bottle.userData.grabbable = true;
+  bottle.userData.kind = 'bottle';
+  bottle.userData.grabRadius = 0.34;
+  bottle.userData.breakable = true;
+  bottle.userData.broken = false;
+
+  const glass = toonMaterial(0x72c4d3);
+  const neck = toonMaterial(0x9be0df);
+  const cap = toonMaterial(0xd8e6ee);
+
+  bottle.add(createCylinder('bottle-body', 0.065, 0.075, 0.26, 0, 0.13, 0, glass, true, 1.08));
+  bottle.add(createCylinder('bottle-neck', 0.032, 0.038, 0.12, 0, 0.32, 0, neck, true, 1.08));
+  bottle.add(createCylinder('bottle-cap', 0.038, 0.038, 0.045, 0, 0.405, 0, cap, true, 1.07));
+
+  return bottle;
+}
+
 function createBox(
   name: string,
   width: number,
@@ -158,6 +260,39 @@ function createBox(
   outlineScale = 1.03
 ): Object3D {
   const geometry = new BoxGeometry(width, height, depth);
+  const group = new Group();
+  group.name = name;
+  group.position.set(x, y, z);
+
+  if (outlined) {
+    const outline = new Mesh(geometry, outlineMaterial);
+    outline.name = `${name}-outline`;
+    outline.scale.setScalar(outlineScale);
+    group.add(outline);
+  }
+
+  const mesh = new Mesh(geometry, material);
+  mesh.name = `${name}-mesh`;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  group.add(mesh);
+
+  return group;
+}
+
+function createCylinder(
+  name: string,
+  radiusTop: number,
+  radiusBottom: number,
+  height: number,
+  x: number,
+  y: number,
+  z: number,
+  material: MeshToonMaterial,
+  outlined: boolean,
+  outlineScale = 1.03
+): Object3D {
+  const geometry = new CylinderGeometry(radiusTop, radiusBottom, height, 14);
   const group = new Group();
   group.name = name;
   group.position.set(x, y, z);

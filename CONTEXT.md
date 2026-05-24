@@ -9,7 +9,7 @@
 
 Prototype WebXR VR pour **Meta Quest** construit avec Three.js, TypeScript et Vite.
 Objectif : une scène VR interactive navigable au casque depuis le réseau local, avec
-locomotion stick et interaction de saisie d'un objet (tableau).
+locomotion stick, saisie d'objets au grip et tir sur des bouteilles cassables.
 
 ---
 
@@ -20,14 +20,14 @@ Trois fichiers source dans `src/` :
 | Fichier | Rôle |
 |---|---|
 | `main.ts` | Bootstrap : renderer, caméras, boucle de rendu, VRButton, statut WebXR |
-| `world.ts` | Construction de la scène cel-shadée (salle, table, tableau) |
-| `xrControls.ts` | Entrées VR : locomotion stick + saisie du tableau au grip |
+| `world.ts` | Construction de la scène cel-shadée (salle, table, tableau mural, pistolet, armoire, bouteilles) |
+| `xrControls.ts` | Entrées VR : locomotion stick, saisie du tableau/pistolet/bouteilles, tir, impacts et effets |
 
 ### Modèle de parenté XR
 
 ```
 Scene
-├── world.root            ← salle + table + tableau (position initiale)
+├── world.root            ← salle + table + tableau mural + pistolet + armoire/bouteilles + effets de tir
 └── playerRig (Group)     ← position du joueur
       ├── xrCamera
       ├── controllerGrip[0]
@@ -53,8 +53,11 @@ donc ils suivent le joueur.
 
 - WebXR exige un **contexte sécurisé (HTTPS)** — utiliser `npm run dev:https` depuis le casque
 - Delta time capé à **50 ms** (`Math.min(clock.getDelta(), 0.05)`) pour éviter le tunneling
-- Le tableau doit être **ajouté à la scène avant** d'instancier `XRControls` (qui mémorise `board.parent`)
-- `userData.grabbable = true` sur le tableau est une convention de marquage — `XRControls` cible cet objet en dur pour l'instant
+- Le pistolet doit être **ajouté à la scène avant** d'instancier `XRControls` (qui mémorise `gun.parent`)
+- Le pistolet expose un enfant `gun-muzzle`, utilisé comme origine et orientation du projectile
+- Le tableau, le pistolet et les bouteilles utilisent `userData.grabbable = true` et `userData.grabRadius`
+- Les bouteilles sont aussi des groupes avec `userData.breakable = true`; elles disparaissent à l'impact et déclenchent des éclats
+- Le grip (`buttons[1]`) saisit l'objet grabbable le plus proche; la gâchette (`buttons[0]`) tire uniquement quand le pistolet est tenu
 
 ---
 
@@ -95,4 +98,6 @@ Lock orphelin (> 10 min) : supprimer et reprendre normalement.
 
 <!-- Ajouter en tête de liste, ne jamais modifier les entrées existantes -->
 
+- [2026-05-24] [Codex] Extension de la saisie — tableau et bouteilles deplacables au grip, pistolet reduit et aligne sur le grip
+- [2026-05-24] [Codex] Transformation en expérience de tir — pistolet saisissable, projectile, armoire, bouteilles cassables, effets et haptique
 - [2026-05-23] [Claude] Création initiale — architecture, contraintes, protocole de verrou

@@ -2,6 +2,8 @@ import {
   BackSide,
   BoxGeometry,
   CapsuleGeometry,
+  ConeGeometry,
+  CylinderGeometry,
   Group,
   MathUtils,
   Mesh,
@@ -9,6 +11,9 @@ import {
   MeshToonMaterial,
   Object3D,
   PerspectiveCamera,
+  Quaternion,
+  Raycaster,
+  SphereGeometry,
   Vector3,
   WebGLRenderer
 } from 'three';
@@ -21,18 +26,32 @@ type ControllerSlot = {
   handedness: ControllerHand | 'none';
   inputSource?: XRInputSource;
   handModel?: StylizedHand;
+  held?: HeldObject;
   wasGrabPressed: boolean;
+  wasTriggerPressed: boolean;
   triggerCurl: number;
   gripCurl: number;
   thumbCurl: number;
 };
 
 const deadzone = 0.18;
+const maxShotDistance = 40;
+const projectileSpeed = 72;
+const projectileFadeSeconds = 0.2;
+const muzzleFlashDuration = 0.085;
+const explosionDuration = 0.55;
 const handScale = 0.75;
 const handRotationX = 5.5;
 const handRotationZ = Math.PI / 2.5;
 const fingerBaseRotationX = Math.PI / 2;
 const fingerClosedRotationX = Math.PI / 2 - 1.08;
+const yAxis = new Vector3(0, 1, 0);
+
+const tracerGeometry = new CylinderGeometry(0.008, 0.014, 1, 8);
+const projectileTipGeometry = new SphereGeometry(0.035, 8, 8);
+const muzzleConeGeometry = new ConeGeometry(0.085, 0.24, 12);
+const muzzleGlowGeometry = new SphereGeometry(0.06, 10, 10);
+const shardGeometry = new BoxGeometry(1, 1, 1);
 
 type StylizedHand = {
   root: Group;
@@ -43,28 +62,92 @@ type StylizedHand = {
   thumbBaseRotationZ: number;
 };
 
+type GrabbableKind = 'gun' | 'board' | 'bottle' | 'object';
+
+type HeldObject = {
+  object: Group;
+  parent: Object3D;
+  kind: GrabbableKind;
+};
+
+type ProjectileShot = {
+  root: Group;
+  tracer: Mesh;
+  tip: Mesh;
+  materials: MeshBasicMaterial[];
+  origin: Vector3;
+  direction: Vector3;
+  distance: number;
+  age: number;
+  impactTime?: number;
+  hitBottle?: Group;
+  hasImpacted: boolean;
+};
+
+type MuzzleFlash = {
+  root: Group;
+  materials: MeshBasicMaterial[];
+  age: number;
+};
+
+type ExplosionShard = {
+  mesh: Mesh;
+  material: MeshBasicMaterial;
+  velocity: Vector3;
+  angularVelocity: Vector3;
+  age: number;
+};
+
+type HapticPulseActuator = {
+  pulse(intensity: number, duration: number): Promise<boolean>;
+};
+
+type HapticGamepad = Gamepad & {
+  hapticActuators?: HapticPulseActuator[];
+  vibrationActuator?: {
+    playEffect(effectType: string, params: { duration: number; strongMagnitude?: number; weakMagnitude?: number }): Promise<void>;
+  };
+};
+
 export class XRControls {
   private readonly slots: ControllerSlot[] = [];
-  private readonly boardParent: Object3D;
-  private grabbedBy?: ControllerSlot;
+  private readonly grabbables: Group[];
+  private readonly muzzle: Object3D;
   private readonly handPosition = new Vector3();
-  private readonly boardPosition = new Vector3();
+  private readonly objectPosition = new Vector3();
   private readonly forward = new Vector3();
   private readonly right = new Vector3();
   private readonly movement = new Vector3();
+  private readonly muzzlePosition = new Vector3();
+  private readonly muzzleQuaternion = new Quaternion();
+  private readonly shotDirection = new Vector3();
+  private readonly impactPosition = new Vector3();
+  private readonly raycaster = new Raycaster();
+  private readonly projectiles: ProjectileShot[] = [];
+  private readonly muzzleFlashes: MuzzleFlash[] = [];
+  private readonly explosionShards: ExplosionShard[] = [];
 
   constructor(
     private readonly renderer: WebGLRenderer,
     private readonly playerRig: Group,
     private readonly camera: PerspectiveCamera,
     private readonly roomBounds: RoomBounds,
-    private readonly board: Group
+    private readonly effectParent: Object3D,
+    private readonly board: Group,
+    private readonly gun: Group,
+    private readonly bottles: Group[]
   ) {
-    const parent = board.parent;
+    const parent = gun.parent;
     if (!parent) {
-      throw new Error('Le tableau doit etre ajoute a la scene avant les controles XR.');
+      throw new Error('Le pistolet doit etre ajoute a la scene avant les controles XR.');
     }
-    this.boardParent = parent;
+
+    const muzzle = gun.getObjectByName('gun-muzzle');
+    if (!muzzle) {
+      throw new Error('Le pistolet doit exposer un point gun-muzzle.');
+    }
+    this.muzzle = muzzle;
+    this.grabbables = [this.gun, this.board, ...this.bottles];
 
     for (let index = 0; index < 2; index += 1) {
       const grip = this.renderer.xr.getControllerGrip(index);
@@ -72,6 +155,7 @@ export class XRControls {
         grip,
         handedness: 'none',
         wasGrabPressed: false,
+        wasTriggerPressed: false,
         triggerCurl: 0,
         gripCurl: 0,
         thumbCurl: 0
@@ -90,6 +174,10 @@ export class XRControls {
     this.updateLocomotion(deltaSeconds);
     this.updateHands(deltaSeconds);
     this.updateGrabbing();
+    this.updateShooting();
+    this.updateProjectiles(deltaSeconds);
+    this.updateMuzzleFlashes(deltaSeconds);
+    this.updateExplosionShards(deltaSeconds);
   }
 
   private connectController(slot: ControllerSlot, event: unknown): void {
@@ -98,14 +186,15 @@ export class XRControls {
       ? inputSource.handedness
       : 'none';
 
-    if (this.grabbedBy === slot) {
-      this.releaseBoard();
+    if (slot.held) {
+      this.releaseHeldObject(slot);
     }
 
     slot.inputSource = inputSource;
     slot.handedness = handedness;
     slot.handModel = undefined;
     slot.wasGrabPressed = false;
+    slot.wasTriggerPressed = false;
     slot.triggerCurl = 0;
     slot.gripCurl = 0;
     slot.thumbCurl = 0;
@@ -120,8 +209,8 @@ export class XRControls {
   }
 
   private disconnectController(slot: ControllerSlot): void {
-    if (this.grabbedBy === slot) {
-      this.releaseBoard();
+    if (slot.held) {
+      this.releaseHeldObject(slot);
     }
 
     slot.grip.visible = false;
@@ -130,6 +219,7 @@ export class XRControls {
     slot.handModel = undefined;
     slot.handedness = 'none';
     slot.wasGrabPressed = false;
+    slot.wasTriggerPressed = false;
     slot.triggerCurl = 0;
     slot.gripCurl = 0;
     slot.thumbCurl = 0;
@@ -197,37 +287,339 @@ export class XRControls {
     for (const slot of this.slots) {
       const isPressed = this.isGrabPressed(slot.inputSource);
 
-      if (isPressed && !this.grabbedBy) {
-        this.tryGrabBoard(slot);
+      if (isPressed && !slot.held) {
+        this.tryGrabObject(slot);
       }
 
-      if (!isPressed && slot.wasGrabPressed && this.grabbedBy === slot) {
-        this.releaseBoard();
+      if (!isPressed && slot.wasGrabPressed && slot.held) {
+        this.releaseHeldObject(slot);
       }
 
       slot.wasGrabPressed = isPressed;
     }
   }
 
-  private tryGrabBoard(slot: ControllerSlot): void {
+  private tryGrabObject(slot: ControllerSlot): void {
     if (slot.handedness === 'none' || !slot.grip.visible) {
       return;
     }
 
     slot.grip.getWorldPosition(this.handPosition);
-    this.board.getWorldPosition(this.boardPosition);
 
-    if (this.handPosition.distanceTo(this.boardPosition) > 0.44) {
+    const object = this.findNearestGrabbable();
+    const parent = object?.parent;
+    if (!object || !parent) {
       return;
     }
 
-    this.grabbedBy = slot;
-    slot.grip.attach(this.board);
+    slot.held = {
+      object,
+      parent,
+      kind: readGrabbableKind(object)
+    };
+    slot.grip.attach(object);
+
+    if (slot.held.kind === 'gun') {
+      this.alignGunInHand(slot);
+    }
   }
 
-  private releaseBoard(): void {
-    this.boardParent.attach(this.board);
-    this.grabbedBy = undefined;
+  private alignGunInHand(slot: ControllerSlot): void {
+    const side = slot.handedness === 'left' ? 1 : -1;
+    this.gun.position.set(side * 0.006, -0.002, -0.035);
+    this.gun.rotation.set(0, 0, 0);
+  }
+
+  private releaseHeldObject(slot: ControllerSlot): void {
+    const held = slot.held;
+    if (!held) {
+      return;
+    }
+
+    if (!held.object.userData.broken) {
+      held.parent.attach(held.object);
+    }
+
+    slot.held = undefined;
+  }
+
+  private findNearestGrabbable(): Group | undefined {
+    let nearest: Group | undefined;
+    let nearestScore = Number.POSITIVE_INFINITY;
+
+    for (const object of this.grabbables) {
+      if (this.isObjectHeld(object) || object.userData.broken || !object.parent) {
+        continue;
+      }
+
+      object.getWorldPosition(this.objectPosition);
+      const radius = readGrabRadius(object);
+      const distance = this.handPosition.distanceTo(this.objectPosition);
+      if (distance > radius) {
+        continue;
+      }
+
+      const score = distance / radius;
+      if (score < nearestScore) {
+        nearest = object;
+        nearestScore = score;
+      }
+    }
+
+    return nearest;
+  }
+
+  private isObjectHeld(object: Group): boolean {
+    return this.slots.some((slot) => slot.held?.object === object);
+  }
+
+  private isHoldingGun(slot: ControllerSlot): boolean {
+    return slot.held?.object === this.gun;
+  }
+
+  private updateShooting(): void {
+    for (const slot of this.slots) {
+      const isPressed = this.isTriggerPressed(slot.inputSource);
+
+      if (isPressed && !slot.wasTriggerPressed && this.isHoldingGun(slot)) {
+        this.fireGun(slot);
+      }
+
+      slot.wasTriggerPressed = isPressed;
+    }
+  }
+
+  private fireGun(slot: ControllerSlot): void {
+    this.muzzle.getWorldPosition(this.muzzlePosition);
+    this.muzzle.getWorldQuaternion(this.muzzleQuaternion);
+    this.shotDirection.set(0, 0, -1).applyQuaternion(this.muzzleQuaternion).normalize();
+
+    const hit = this.findShotHit();
+    const shotDistance = hit ? hit.distance : maxShotDistance;
+    const impactTime = hit ? Math.max(hit.distance / projectileSpeed, 0.01) : undefined;
+
+    this.projectiles.push(this.createProjectileShot(shotDistance, hit?.bottle, impactTime));
+    this.createMuzzleFlash(this.muzzlePosition, this.shotDirection);
+    this.pulseHeldController(slot);
+  }
+
+  private findShotHit(): { bottle: Group; distance: number; point: Vector3 } | undefined {
+    const targets = this.bottles.filter((bottle) => !bottle.userData.broken && Boolean(bottle.parent));
+    if (targets.length === 0) {
+      return undefined;
+    }
+
+    this.raycaster.set(this.muzzlePosition, this.shotDirection);
+    this.raycaster.near = 0;
+    this.raycaster.far = maxShotDistance;
+
+    const hits = this.raycaster.intersectObjects(targets, true);
+    for (const hit of hits) {
+      const bottle = findBreakableBottle(hit.object);
+      if (bottle && !bottle.userData.broken) {
+        return {
+          bottle,
+          distance: hit.distance,
+          point: hit.point.clone()
+        };
+      }
+    }
+
+    return undefined;
+  }
+
+  private createProjectileShot(distance: number, hitBottle?: Group, impactTime?: number): ProjectileShot {
+    const root = new Group();
+    root.name = 'projectile-shot';
+
+    const tracerMaterial = new MeshBasicMaterial({ color: 0xfff1a8, transparent: true, opacity: 0.92 });
+    const tipMaterial = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1 });
+    const tracer = new Mesh(tracerGeometry, tracerMaterial);
+    const tip = new Mesh(projectileTipGeometry, tipMaterial);
+
+    tracer.name = 'projectile-trace';
+    tracer.visible = false;
+    tip.name = 'projectile-head';
+    tip.visible = false;
+    root.add(tracer);
+    root.add(tip);
+    this.effectParent.add(root);
+
+    return {
+      root,
+      tracer,
+      tip,
+      materials: [tracerMaterial, tipMaterial],
+      origin: this.muzzlePosition.clone(),
+      direction: this.shotDirection.clone(),
+      distance,
+      age: 0,
+      impactTime,
+      hitBottle,
+      hasImpacted: false
+    };
+  }
+
+  private updateProjectiles(deltaSeconds: number): void {
+    for (let index = this.projectiles.length - 1; index >= 0; index -= 1) {
+      const shot = this.projectiles[index];
+      shot.age += deltaSeconds;
+
+      const visibleLength = Math.min(shot.distance, shot.age * projectileSpeed);
+      if (visibleLength > 0.001) {
+        shot.tracer.visible = true;
+        shot.tip.visible = true;
+        shot.tracer.quaternion.setFromUnitVectors(yAxis, shot.direction);
+        shot.tracer.scale.set(1, visibleLength, 1);
+        shot.tracer.position.copy(shot.origin).addScaledVector(shot.direction, visibleLength * 0.5);
+        shot.tip.position.copy(shot.origin).addScaledVector(shot.direction, visibleLength);
+      }
+
+      if (shot.hitBottle && shot.impactTime !== undefined && !shot.hasImpacted && shot.age >= shot.impactTime) {
+        this.impactPosition.copy(shot.origin).addScaledVector(shot.direction, shot.distance);
+        this.breakBottle(shot.hitBottle, this.impactPosition);
+        shot.hasImpacted = true;
+      }
+
+      const fadeStart = shot.distance / projectileSpeed;
+      const fadeProgress = MathUtils.clamp((shot.age - fadeStart) / projectileFadeSeconds, 0, 1);
+      const opacity = 1 - fadeProgress;
+      for (const material of shot.materials) {
+        material.opacity = opacity;
+      }
+
+      if (fadeProgress >= 1) {
+        this.effectParent.remove(shot.root);
+        for (const material of shot.materials) {
+          material.dispose();
+        }
+        this.projectiles.splice(index, 1);
+      }
+    }
+  }
+
+  private createMuzzleFlash(origin: Vector3, direction: Vector3): void {
+    const root = new Group();
+    root.name = 'muzzle-flash';
+    root.position.copy(origin);
+    root.quaternion.setFromUnitVectors(yAxis, direction);
+
+    const coneMaterial = new MeshBasicMaterial({ color: 0xffc247, transparent: true, opacity: 0.95 });
+    const glowMaterial = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.88 });
+    const cone = new Mesh(muzzleConeGeometry, coneMaterial);
+    const glow = new Mesh(muzzleGlowGeometry, glowMaterial);
+
+    cone.position.y = 0.12;
+    glow.position.y = 0.045;
+    root.add(cone);
+    root.add(glow);
+    this.effectParent.add(root);
+
+    this.muzzleFlashes.push({
+      root,
+      materials: [coneMaterial, glowMaterial],
+      age: 0
+    });
+  }
+
+  private updateMuzzleFlashes(deltaSeconds: number): void {
+    for (let index = this.muzzleFlashes.length - 1; index >= 0; index -= 1) {
+      const flash = this.muzzleFlashes[index];
+      flash.age += deltaSeconds;
+
+      const progress = MathUtils.clamp(flash.age / muzzleFlashDuration, 0, 1);
+      flash.root.scale.setScalar(1 + progress * 1.8);
+      for (const material of flash.materials) {
+        material.opacity = 1 - progress;
+      }
+
+      if (progress >= 1) {
+        this.effectParent.remove(flash.root);
+        for (const material of flash.materials) {
+          material.dispose();
+        }
+        this.muzzleFlashes.splice(index, 1);
+      }
+    }
+  }
+
+  private breakBottle(bottle: Group, impactPoint: Vector3): void {
+    if (bottle.userData.broken) {
+      return;
+    }
+
+    bottle.userData.broken = true;
+    for (const slot of this.slots) {
+      if (slot.held?.object === bottle) {
+        slot.held = undefined;
+      }
+    }
+    bottle.parent?.remove(bottle);
+    this.createBottleExplosion(impactPoint);
+  }
+
+  private createBottleExplosion(origin: Vector3): void {
+    for (let index = 0; index < 16; index += 1) {
+      const material = new MeshBasicMaterial({ color: index % 3 === 0 ? 0xffffff : 0x85dce8, transparent: true, opacity: 0.92 });
+      const shard = new Mesh(shardGeometry, material);
+      const spread = randomUnitVector();
+      const speed = 0.85 + Math.random() * 1.65;
+
+      shard.name = 'bottle-shard';
+      shard.position.copy(origin);
+      shard.scale.set(0.018 + Math.random() * 0.035, 0.01 + Math.random() * 0.026, 0.012 + Math.random() * 0.03);
+      this.effectParent.add(shard);
+
+      this.explosionShards.push({
+        mesh: shard,
+        material,
+        velocity: spread.multiplyScalar(speed),
+        angularVelocity: new Vector3(
+          (Math.random() - 0.5) * 8,
+          (Math.random() - 0.5) * 8,
+          (Math.random() - 0.5) * 8
+        ),
+        age: 0
+      });
+    }
+  }
+
+  private updateExplosionShards(deltaSeconds: number): void {
+    for (let index = this.explosionShards.length - 1; index >= 0; index -= 1) {
+      const shard = this.explosionShards[index];
+      shard.age += deltaSeconds;
+
+      shard.velocity.y -= 1.9 * deltaSeconds;
+      shard.mesh.position.addScaledVector(shard.velocity, deltaSeconds);
+      shard.mesh.rotation.x += shard.angularVelocity.x * deltaSeconds;
+      shard.mesh.rotation.y += shard.angularVelocity.y * deltaSeconds;
+      shard.mesh.rotation.z += shard.angularVelocity.z * deltaSeconds;
+
+      const progress = MathUtils.clamp(shard.age / explosionDuration, 0, 1);
+      shard.material.opacity = 0.92 * (1 - progress);
+
+      if (progress >= 1) {
+        this.effectParent.remove(shard.mesh);
+        shard.material.dispose();
+        this.explosionShards.splice(index, 1);
+      }
+    }
+  }
+
+  private pulseHeldController(slot: ControllerSlot): void {
+    const gamepad = slot.inputSource?.gamepad as HapticGamepad | undefined;
+    const pulseActuator = gamepad?.hapticActuators?.[0];
+
+    if (pulseActuator) {
+      void pulseActuator.pulse(0.55, 55);
+      return;
+    }
+
+    void gamepad?.vibrationActuator?.playEffect('dual-rumble', {
+      duration: 55,
+      strongMagnitude: 0.45,
+      weakMagnitude: 0.25
+    });
   }
 
   private readStick(handedness: ControllerHand): { x: number; y: number } {
@@ -253,8 +645,55 @@ export class XRControls {
       return false;
     }
 
-    return Boolean(buttons[0]?.pressed || buttons[1]?.pressed);
+    return Boolean(buttons[1]?.pressed);
   }
+
+  private isTriggerPressed(inputSource?: XRInputSource): boolean {
+    const buttons = inputSource?.gamepad?.buttons;
+    if (!buttons) {
+      return false;
+    }
+
+    return Boolean(buttons[0]?.pressed);
+  }
+}
+
+function findBreakableBottle(object: Object3D): Group | undefined {
+  let current: Object3D | null = object;
+
+  while (current) {
+    if (current instanceof Group && current.userData.breakable === true) {
+      return current;
+    }
+
+    current = current.parent;
+  }
+
+  return undefined;
+}
+
+function readGrabbableKind(object: Group): GrabbableKind {
+  const kind = object.userData.kind;
+  return kind === 'gun' || kind === 'board' || kind === 'bottle' ? kind : 'object';
+}
+
+function readGrabRadius(object: Group): number {
+  const radius = object.userData.grabRadius;
+  return typeof radius === 'number' ? radius : 0.34;
+}
+
+function randomUnitVector(): Vector3 {
+  const vector = new Vector3(
+    Math.random() - 0.5,
+    Math.random() * 0.9 + 0.15,
+    Math.random() - 0.5
+  );
+
+  if (vector.lengthSq() < 0.0001) {
+    vector.set(0, 1, 0);
+  }
+
+  return vector.normalize();
 }
 
 function createStylizedHand(handedness: ControllerHand): StylizedHand {

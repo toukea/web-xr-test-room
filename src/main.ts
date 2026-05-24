@@ -54,7 +54,7 @@ desktopControls.minDistance = 0.9;
 desktopControls.maxDistance = 4.2;
 desktopControls.maxPolarAngle = Math.PI * 0.52;
 
-const xrControls = new XRControls(renderer, playerRig, xrCamera, world.roomBounds, world.board);
+const xrControls = new XRControls(renderer, playerRig, xrCamera, world.roomBounds, world.root, world.board, world.gun, world.bottles);
 const clock = new Clock();
 
 const sessionInit: XRSessionInit = {
