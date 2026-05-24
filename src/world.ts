@@ -201,7 +201,7 @@ function createCabinet(): { cabinet: Group; bottles: Group[] } {
   const wood = toonMaterial(0x70451f);
   const shadowWood = toonMaterial(0x563319);
   const width = 2.35;
-  const height = 1.78;
+  const height = 2.12;
   const depth = 0.48;
 
   cabinet.add(createBox('cabinet-back', width, height, 0.08, 0, height / 2, -depth / 2, shadowWood, true, 1.025));
