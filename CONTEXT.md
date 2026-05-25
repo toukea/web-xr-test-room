@@ -20,14 +20,14 @@ Trois fichiers source dans `src/` :
 | Fichier | Rôle |
 |---|---|
 | `main.ts` | Bootstrap : renderer, caméras, boucle de rendu, VRButton, statut WebXR |
-| `world.ts` | Construction de la scène cel-shadée (salle, table, tableau mural, pistolet, armoire, bouteilles) |
-| `xrControls.ts` | Entrées VR : locomotion stick, saisie du tableau/pistolet/bouteilles, tir, impacts et effets |
+| `world.ts` | Construction de la scène cel-shadée (salle, table, tableau mural, pistolet, armoire, bouteilles, bouton reset) |
+| `xrControls.ts` | Entrées VR : locomotion stick, saisie du tableau/pistolet/bouteilles, tir, reset, impacts et effets |
 
 ### Modèle de parenté XR
 
 ```
 Scene
-├── world.root            ← salle + table + tableau mural + pistolet + armoire/bouteilles + effets de tir
+├── world.root            ← salle + table + tableau mural + pistolet + armoire/bouteilles + bouton reset + effets de tir
 └── playerRig (Group)     ← position du joueur
       ├── xrCamera
       ├── controllerGrip[0]
@@ -58,6 +58,7 @@ donc ils suivent le joueur.
 - Le tableau, le pistolet et les bouteilles utilisent `userData.grabbable = true` et `userData.grabRadius`
 - Les bouteilles sont aussi des groupes avec `userData.breakable = true`; elles disparaissent à l'impact et déclenchent des éclats
 - Le grip (`buttons[1]`) saisit l'objet grabbable le plus proche; la gâchette (`buttons[0]`) tire uniquement quand le pistolet est tenu
+- Le bouton vert `RESET`, place sur le mur derriere le joueur, s'active a la gachette quand le controleur est proche et restaure les bouteilles
 
 ---
 
@@ -98,6 +99,7 @@ Lock orphelin (> 10 min) : supprimer et reprendre normalement.
 
 <!-- Ajouter en tête de liste, ne jamais modifier les entrées existantes -->
 
+- [2026-05-25] [Codex] Ajout bouton RESET mural — restauration instantanee des bouteilles cassees/deplacees
 - [2026-05-24] [Codex] Extension de la saisie — tableau et bouteilles deplacables au grip, pistolet reduit et aligne sur le grip
 - [2026-05-24] [Codex] Transformation en expérience de tir — pistolet saisissable, projectile, armoire, bouteilles cassables, effets et haptique
 - [2026-05-23] [Claude] Création initiale — architecture, contraintes, protocole de verrou

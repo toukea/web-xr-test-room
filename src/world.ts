@@ -12,6 +12,7 @@ import {
   MeshToonMaterial,
   NearestFilter,
   Object3D,
+  PlaneGeometry,
   Vector3
 } from 'three';
 
@@ -27,6 +28,7 @@ export type World = {
   board: Group;
   gun: Group;
   bottles: Group[];
+  resetButton: Group;
   roomBounds: RoomBounds;
   spawn: Vector3;
 };
@@ -63,11 +65,16 @@ export function createWorld(): World {
   cabinet.position.set(0, 0, -2.82);
   root.add(cabinet);
 
+  const resetButton = createResetButton();
+  resetButton.position.set(0, 1.34, roomDepth / 2 - wallThickness - 0.05);
+  root.add(resetButton);
+
   return {
     root,
     board,
     gun,
     bottles,
+    resetButton,
     roomBounds: {
       minX: -roomWidth / 2 + 0.42,
       maxX: roomWidth / 2 - 0.42,
@@ -184,6 +191,12 @@ function createGun(): Group {
   gun.add(createBox('gun-trigger-guard-bottom', 0.03, 0.03, 0.14, 0, -0.08, -0.04, darkMetal, true, 1.08));
   gun.add(createBox('gun-trigger', 0.022, 0.075, 0.025, 0, -0.052, -0.072, accent, false));
   gun.add(createBox('gun-front-sight', 0.045, 0.035, 0.035, 0, 0.172, -0.48, accent, false));
+  gun.add(createBox('gun-rear-sight', 0.06, 0.038, 0.03, 0, 0.17, 0.01, accent, false));
+  gun.add(createBox('gun-hammer', 0.05, 0.065, 0.04, 0, 0.155, 0.06, darkMetal, true, 1.06));
+  gun.add(createBox('gun-mag-base', 0.155, 0.022, 0.13, 0, -0.261, 0.035, darkMetal, true, 1.06));
+  for (let i = 0; i < 3; i++) {
+    gun.add(createBox(`gun-serration-${i}`, 0.185, 0.098, 0.015, 0, 0.092, 0.025 - i * 0.05, darkMetal, false));
+  }
 
   const muzzle = new Object3D();
   muzzle.name = 'gun-muzzle';
@@ -225,6 +238,31 @@ function createCabinet(): { cabinet: Group; bottles: Group[] } {
   }
 
   return { cabinet, bottles };
+}
+
+function createResetButton(): Group {
+  const button = new Group();
+  button.name = 'reset-bottles-button';
+  button.userData.kind = 'reset-button';
+
+  const green = toonMaterial(0x1fb75a);
+  const darkGreen = toonMaterial(0x0b5f2c);
+
+  button.add(createBox('reset-button-plate', 0.62, 0.3, 0.07, 0, 0, 0, green, true, 1.045));
+  button.add(createBox('reset-button-bevel', 0.72, 0.4, 0.035, 0, 0, 0.025, darkGreen, true, 1.025));
+
+  const labelGeometry = new PlaneGeometry(0.5, 0.18);
+  const labelMaterial = new MeshBasicMaterial({
+    map: createResetLabelTexture(),
+    transparent: true
+  });
+  const label = new Mesh(labelGeometry, labelMaterial);
+  label.name = 'reset-button-label';
+  label.position.set(0, 0, -0.041);
+  label.rotation.y = Math.PI;
+  button.add(label);
+
+  return button;
 }
 
 function createBottle(): Group {
@@ -338,6 +376,31 @@ function createToonGradient(): CanvasTexture {
   context.fillRect(2, 0, 1, 1);
   context.fillStyle = '#ffffff';
   context.fillRect(3, 0, 1, 1);
+
+  const texture = new CanvasTexture(canvas);
+  texture.minFilter = NearestFilter;
+  texture.magFilter = NearestFilter;
+  texture.generateMipmaps = false;
+
+  return texture;
+}
+
+function createResetLabelTexture(): CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 192;
+
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('Impossible de creer la texture du bouton RESET.');
+  }
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = '#ffffff';
+  context.font = 'bold 92px Arial, sans-serif';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText('RESET', canvas.width / 2, canvas.height / 2 + 6);
 
   const texture = new CanvasTexture(canvas);
   texture.minFilter = NearestFilter;

@@ -40,6 +40,7 @@ const projectileSpeed = 72;
 const projectileFadeSeconds = 0.2;
 const muzzleFlashDuration = 0.085;
 const explosionDuration = 0.55;
+const resetButtonRadius = 0.34;
 const handScale = 0.75;
 const handRotationX = 5.5;
 const handRotationZ = Math.PI / 2.5;
@@ -98,6 +99,14 @@ type ExplosionShard = {
   age: number;
 };
 
+type BottleResetState = {
+  bottle: Group;
+  parent: Object3D;
+  position: Vector3;
+  quaternion: Quaternion;
+  scale: Vector3;
+};
+
 type HapticPulseActuator = {
   pulse(intensity: number, duration: number): Promise<boolean>;
 };
@@ -113,8 +122,10 @@ export class XRControls {
   private readonly slots: ControllerSlot[] = [];
   private readonly grabbables: Group[];
   private readonly muzzle: Object3D;
+  private readonly bottleResetStates: BottleResetState[];
   private readonly handPosition = new Vector3();
   private readonly objectPosition = new Vector3();
+  private readonly resetButtonPosition = new Vector3();
   private readonly forward = new Vector3();
   private readonly right = new Vector3();
   private readonly movement = new Vector3();
@@ -135,7 +146,8 @@ export class XRControls {
     private readonly effectParent: Object3D,
     private readonly board: Group,
     private readonly gun: Group,
-    private readonly bottles: Group[]
+    private readonly bottles: Group[],
+    private readonly resetButton: Group
   ) {
     const parent = gun.parent;
     if (!parent) {
@@ -148,6 +160,20 @@ export class XRControls {
     }
     this.muzzle = muzzle;
     this.grabbables = [this.gun, this.board, ...this.bottles];
+    this.bottleResetStates = this.bottles.map((bottle) => {
+      const parent = bottle.parent;
+      if (!parent) {
+        throw new Error('Chaque bouteille doit etre ajoutee a la scene avant les controles XR.');
+      }
+
+      return {
+        bottle,
+        parent,
+        position: bottle.position.clone(),
+        quaternion: bottle.quaternion.clone(),
+        scale: bottle.scale.clone()
+      };
+    });
 
     for (let index = 0; index < 2; index += 1) {
       const grip = this.renderer.xr.getControllerGrip(index);
@@ -326,7 +352,7 @@ export class XRControls {
 
   private alignGunInHand(slot: ControllerSlot): void {
     const side = slot.handedness === 'left' ? 1 : -1;
-    this.gun.position.set(side * 0.006, -0.002, -0.035);
+    this.gun.position.set(side * 0.006, 0.020, -0.035);
     this.gun.rotation.set(-0.73, 0, 0.3);
   }
 
@@ -381,11 +407,45 @@ export class XRControls {
     for (const slot of this.slots) {
       const isPressed = this.isTriggerPressed(slot.inputSource);
 
-      if (isPressed && !slot.wasTriggerPressed && this.isHoldingGun(slot)) {
-        this.fireGun(slot);
+      if (isPressed && !slot.wasTriggerPressed) {
+        if (this.tryPressResetButton(slot)) {
+          this.resetBottles();
+          this.pulseHeldController(slot);
+        } else if (this.isHoldingGun(slot)) {
+          this.fireGun(slot);
+        }
       }
 
       slot.wasTriggerPressed = isPressed;
+    }
+  }
+
+  private tryPressResetButton(slot: ControllerSlot): boolean {
+    if (slot.handedness === 'none' || !slot.grip.visible) {
+      return false;
+    }
+
+    slot.grip.getWorldPosition(this.handPosition);
+    this.resetButton.getWorldPosition(this.resetButtonPosition);
+
+    return this.handPosition.distanceTo(this.resetButtonPosition) <= resetButtonRadius;
+  }
+
+  private resetBottles(): void {
+    for (const slot of this.slots) {
+      if (slot.held?.kind === 'bottle') {
+        slot.held = undefined;
+      }
+    }
+
+    for (const state of this.bottleResetStates) {
+      state.bottle.userData.broken = false;
+      state.bottle.visible = true;
+      state.parent.add(state.bottle);
+      state.bottle.position.copy(state.position);
+      state.bottle.quaternion.copy(state.quaternion);
+      state.bottle.scale.copy(state.scale);
+      state.bottle.updateMatrixWorld(true);
     }
   }
 
